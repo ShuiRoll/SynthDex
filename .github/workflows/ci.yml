@@ -7,7 +7,9 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # The golden screenshots in test/goldens were rendered on Windows; running
+    # the same pixels on Linux fails them by 2-5% on font rasterisation alone.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
