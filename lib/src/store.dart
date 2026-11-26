@@ -292,7 +292,15 @@ class AppStore extends ChangeNotifier {
   Future<void> _initialize() async {
     if (memoryOnly) return;
     _storage ??= await SharedPreferences.getInstance();
-    undoableReplacement = _readUndoSnapshot();
+    // Snapshots from before the shared envelope existed cannot be offered, so
+    // drop them rather than leaving their data unreachable.
+    for (final key in const [
+      'synthdex.before_import',
+      'synthdex.before_restore',
+    ]) {
+      if (_storage!.containsKey(key)) await _storage!.remove(key);
+    }
+    undoableReplacement = await _readUndoSnapshot();
     _catalogRefreshedAt = DateTime.tryParse(
       _storage!.getString(catalogRefreshedKey) ?? '',
     );
@@ -761,15 +769,39 @@ class AppStore extends ChangeNotifier {
     return result;
   }
 
-  /// The reason recorded with the kept document, or null when there is none or
-  /// it cannot be read.
-  ReplacementKind? _readUndoSnapshot() {
+  /// The reason recorded with the kept document, or null when there is none.
+  /// A damaged envelope is removed, so it cannot leave data sitting there with
+  /// no button to reach it.
+  Future<ReplacementKind?> _readUndoSnapshot() async {
     if (memoryOnly) return null;
     final raw = _storage!.getString(beforeReplaceKey);
     if (raw == null) return null;
+    final kind = _undoSnapshotKind(raw);
+    if (kind == null) await _storage!.remove(beforeReplaceKey);
+    return kind;
+  }
+
+  /// The reason in a kept snapshot, or null when the envelope is not readable.
+  static ReplacementKind? _undoSnapshotKind(String raw) {
     try {
-      final kind = (jsonDecode(raw) as Map)['kind'];
-      return ReplacementKind.values.byName(kind as String);
+      final envelope = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      if (envelope['document'] is! String) return null;
+      return ReplacementKind.values.byName(envelope['kind'] as String);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The document inside a kept snapshot, or null when it is not valid local
+  /// data (a hand-edited or truncated value must not crash the app).
+  Map<String, dynamic>? _undoSnapshotDocument(String raw) {
+    try {
+      final envelope = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      final data = Map<String, dynamic>.from(
+        jsonDecode(envelope['document'] as String) as Map,
+      );
+      _validate(data);
+      return data;
     } catch (_) {
       return null;
     }
@@ -787,14 +819,18 @@ class AppStore extends ChangeNotifier {
     await initialize();
     await _queue;
     final raw = memoryOnly ? null : _storage!.getString(beforeReplaceKey);
-    if (raw == null) {
-      throw StateError('There is nothing to undo.');
+    final data = raw == null ? null : _undoSnapshotDocument(raw);
+    if (data == null) {
+      // Nothing kept, or something unreadable: drop it either way so the offer
+      // cannot stay behind after this failure.
+      await _clearUndoSnapshot();
+      if (raw != null) notifyListeners();
+      throw StateError(
+        raw == null
+            ? 'There is nothing to undo.'
+            : 'The saved data can no longer be restored.',
+      );
     }
-    final envelope = Map<String, dynamic>.from(jsonDecode(raw) as Map);
-    final data = Map<String, dynamic>.from(
-      jsonDecode(envelope['document'] as String) as Map,
-    );
-    _validate(data);
     await _clearUndoSnapshot();
     await _persist(data, change: false);
   }
@@ -867,10 +903,10 @@ class AppStore extends ChangeNotifier {
       throw StateError('Account changed during restore.');
     }
     final data = Map<String, dynamic>.from(raw as Map);
-    _validate(data);
     data['backup_at'] = DateTime.tryParse((data['saved_at'] as String?) ?? '')
         ?.toIso8601String();
     data['pending_changes'] = 0;
+    // replaceLocal validates the document it writes.
     await replaceLocal(data, ReplacementKind.restore, change: false);
   }
 

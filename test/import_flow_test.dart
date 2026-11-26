@@ -112,6 +112,42 @@ void main() {
     return contents;
   }
 
+  test('a damaged undo snapshot is dropped, not left unreachable', () async {
+    SharedPreferences.setMockInitialValues({
+      AppStore.beforeReplaceKey: 'not an envelope',
+      'synthdex.before_import': '{"old":true}',
+      'synthdex.before_restore': '{"old":true}',
+    });
+    final store = AppStore(null);
+    await store.initialize();
+    expect(store.undoableReplacement, isNull);
+    await expectLater(store.undoReplacement(), throwsA(isA<StateError>()));
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(AppStore.beforeReplaceKey), isNull);
+    expect(prefs.getString('synthdex.before_import'), isNull);
+    expect(prefs.getString('synthdex.before_restore'), isNull);
+    store.dispose();
+  });
+
+  test('an undo snapshot with an unusable document fails safely', () async {
+    SharedPreferences.setMockInitialValues({
+      AppStore.beforeReplaceKey: jsonEncode({
+        'kind': 'import',
+        'document': '{"version":1}',
+      }),
+    });
+    final store = AppStore(null);
+    await store.initialize();
+    expect(store.undoableReplacement, ReplacementKind.import);
+
+    await expectLater(store.undoReplacement(), throwsStateError);
+    expect(store.undoableReplacement, isNull);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(AppStore.beforeReplaceKey), isNull);
+    store.dispose();
+  });
+
   testWidgets('import dialog and toast pluralize one of each record', (
     tester,
   ) async {
