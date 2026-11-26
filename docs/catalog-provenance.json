@@ -1,0 +1,39 @@
+{
+  "repository": "Sekai-World/sekai-master-db-en-diff",
+  "commit": "1ffbf9a3dc6400310987843ce79d7052e199b258",
+  "as_of": "2026-11-13T07:35:05.247815+00:00",
+  "source_songs": 654,
+  "playable_songs": 647,
+  "playable_charts": 3356,
+  "append_charts": 121,
+  "excluded": [
+    {
+      "id": 241,
+      "title": "When the Morning Glory Falls"
+    },
+    {
+      "id": 290,
+      "title": "What Sort of Ending Are You Wishing For?"
+    },
+    {
+      "id": 388,
+      "title": "The Intense Voice of Hatsune Miku"
+    },
+    {
+      "id": 600,
+      "title": "Go forth"
+    },
+    {
+      "id": 674,
+      "title": "High Level Master Medley"
+    },
+    {
+      "id": 675,
+      "title": "Ultimate COLORFUL STAGE! Medley"
+    },
+    {
+      "id": 676,
+      "title": "Difficult Anniversary Original Songs Medley"
+    }
+  ]
+}
