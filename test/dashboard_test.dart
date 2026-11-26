@@ -117,7 +117,8 @@ void main() {
       expect(reopened.pendingChanges, 0);
       expect(reopened.backupAt, DateTime.utc(2026, 6, 2, 8, 30));
       expect(reopened.name, 'Restored');
-      expect(prefs.getString('synthdex.before_restore'), isNotNull);
+      expect(prefs.getString(AppStore.beforeReplaceKey), isNotNull);
+      expect(reopened.undoableReplacement, ReplacementKind.restore);
       await reopened.reset();
       expect(reopened.pendingChanges, 1);
       expect(reopened.attempts, isEmpty);

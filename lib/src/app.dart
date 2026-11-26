@@ -1229,6 +1229,9 @@ class _HubState extends State<Hub> {
       if (contents == null || !mounted) return;
       final file = await s.readProgressFile(contents);
       if (!mounted) return;
+      final localAttempts = s.attempts.length;
+      final localFavorites = s.favorites.length;
+      final localCards = s.cardCollection.length;
       final merge = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -1237,8 +1240,11 @@ class _HubState extends State<Hub> {
             'This file holds ${counted(file.attemptCount, 'attempt')}, '
             '${counted(file.favoriteCount, 'favorite')} and '
             '${counted(file.cardCount, 'card')}.\n\n'
-            'Merge keeps the progress already on this device. Replace deletes '
-            'local attempts, favorites and cards first.',
+            'Replace deletes everything already on this device (currently '
+            '${counted(localAttempts, 'attempt')}, '
+            '${counted(localFavorites, 'favorite')} and '
+            '${counted(localCards, 'card')}) and keeps only the file. '
+            'Merge keeps both and adds anything missing.',
           ),
           actions: [
             TextButton(
@@ -1274,6 +1280,27 @@ class _HubState extends State<Hub> {
       if (mounted) toast('Could not import that progress file.');
     } finally {
       if (mounted) setState(() => importingProgress = false);
+    }
+  }
+
+  Future<void> undoReplacementAction() async {
+    final kind = s.undoableReplacement;
+    if (busy || kind == null) return;
+    final what = kind == ReplacementKind.import ? 'import' : 'cloud restore';
+    final yes = await confirm(
+      'Undo $what?',
+      'This puts back the progress this device had before the last $what and '
+          'discards what it added.',
+      'Undo',
+    );
+    if (!yes || !mounted) return;
+    try {
+      await s.undoReplacement();
+      if (mounted) {
+        toast('Restored the progress from before the last $what.');
+      }
+    } on StateError catch (e) {
+      if (mounted) toast(e.message);
     }
   }
 
@@ -1591,6 +1618,21 @@ class _HubState extends State<Hub> {
         'Restores one of your SynthDex exports on this device. You choose whether to replace or merge the attempts, favorites and cards already here. No account needed.',
         style: TextStyle(color: muted, fontSize: 12),
       ),
+      if (s.undoableReplacement case final kind?) ...[
+        gap(12),
+        action(
+          kind == ReplacementKind.import ? 'Undo import' : 'Undo restore',
+          busy ? null : undoReplacementAction,
+          secondary: true,
+        ),
+        gap(8),
+        Text(
+          kind == ReplacementKind.import
+              ? 'Puts back the attempts, favorites and cards this device had before the last replacing import.'
+              : 'Puts back the attempts, favorites and cards this device had before the last cloud restore.',
+          style: TextStyle(color: muted, fontSize: 12),
+        ),
+      ],
       gap(28),
 
       TextButton(

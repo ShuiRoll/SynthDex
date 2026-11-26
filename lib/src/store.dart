@@ -144,6 +144,9 @@ String newId() {
   return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
 }
 
+/// Which explicit replacement the kept previous document can undo.
+enum ReplacementKind { import, restore }
+
 /// Local-first personal data. Authentication is used only by explicit backup actions.
 class AppStore extends ChangeNotifier {
   AppStore(this.client, {this._storage, this.memoryOnly = false}) {
@@ -157,11 +160,16 @@ class AppStore extends ChangeNotifier {
   static const localKey = 'synthdex.personal.v1',
       catalogKey = 'synthdex.catalog.en.v2',
       cardsKey = 'synthdex.cards.en.v1',
+      beforeReplaceKey = 'synthdex.before_replace',
       catalogRefreshedKey = 'synthdex.catalog.refreshed.v1';
   final SupabaseClient? client;
   late final AccountController accounts;
   final bool memoryOnly;
   SharedPreferences? _storage;
+
+  /// What the kept pre-replacement document would undo, or null when there is
+  /// no offer (nothing kept, or later edits retired it).
+  ReplacementKind? undoableReplacement;
   StreamSubscription<AuthState>? subscription;
   Future<void>? _initialization;
   Future<void> _queue = Future.value();
@@ -284,6 +292,7 @@ class AppStore extends ChangeNotifier {
   Future<void> _initialize() async {
     if (memoryOnly) return;
     _storage ??= await SharedPreferences.getInstance();
+    undoableReplacement = _readUndoSnapshot();
     _catalogRefreshedAt = DateTime.tryParse(
       _storage!.getString(catalogRefreshedKey) ?? '',
     );
@@ -561,12 +570,23 @@ class AppStore extends ChangeNotifier {
         );
       }
       final next = snapshot();
+      final before = _progressFingerprint(next);
       edit(next);
+      // Undo only reaches back to the replacement while nothing has been
+      // recorded since, so the first later progress change retires it.
+      if (undoableReplacement != null && _progressFingerprint(next) != before) {
+        await _clearUndoSnapshot();
+      }
       await _persist(next, change: change);
     });
     _queue = result.catchError((Object _) {});
     return result;
   }
+
+  /// The progress-bearing parts of a document. Edits that leave attempts,
+  /// favorites and cards alone keep the import undo offer available.
+  static String _progressFingerprint(Map<String, dynamic> data) =>
+      jsonEncode([data['attempts'], data['favorites'], data['cards']]);
 
   Future<void> refresh({bool force = false}) async {
     await initialize();
@@ -712,9 +732,77 @@ class AppStore extends ChangeNotifier {
     data['theme'] = appTheme;
     data['appearance'] = appearance ?? this.appearance;
   });
+
+  /// Replaces local data outright, keeping the document it replaces so Settings
+  /// can offer an undo. A replacing import and a cloud restore both use this.
+  /// [change] follows the caller's pending-change accounting.
+  Future<void> replaceLocal(
+    Map<String, dynamic> data,
+    ReplacementKind kind, {
+    required bool change,
+  }) {
+    final result = _queue.then((_) async {
+      await initialize();
+      _validate(data);
+      final previous = memoryOnly ? null : _storage!.getString(localKey);
+      if (previous == null) {
+        await _clearUndoSnapshot();
+      } else if (!await _storage!.setString(
+        beforeReplaceKey,
+        jsonEncode({'kind': kind.name, 'document': previous}),
+      )) {
+        throw StateError('Could not keep the data from before this change.');
+      } else {
+        undoableReplacement = kind;
+      }
+      await _persist(data, change: change);
+    });
+    _queue = result.catchError((Object _) {});
+    return result;
+  }
+
+  /// The reason recorded with the kept document, or null when there is none or
+  /// it cannot be read.
+  ReplacementKind? _readUndoSnapshot() {
+    if (memoryOnly) return null;
+    final raw = _storage!.getString(beforeReplaceKey);
+    if (raw == null) return null;
+    try {
+      final kind = (jsonDecode(raw) as Map)['kind'];
+      return ReplacementKind.values.byName(kind as String);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Drops the kept document so it can never rewind later edits.
+  Future<void> _clearUndoSnapshot() async {
+    if (!memoryOnly) await _storage!.remove(beforeReplaceKey);
+    undoableReplacement = null;
+  }
+
+  /// Puts back the document kept by the last replacing import or cloud restore,
+  /// exactly as it was, including preferences and change counters.
+  Future<void> undoReplacement() async {
+    await initialize();
+    await _queue;
+    final raw = memoryOnly ? null : _storage!.getString(beforeReplaceKey);
+    if (raw == null) {
+      throw StateError('There is nothing to undo.');
+    }
+    final envelope = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final data = Map<String, dynamic>.from(
+      jsonDecode(envelope['document'] as String) as Map,
+    );
+    _validate(data);
+    await _clearUndoSnapshot();
+    await _persist(data, change: false);
+  }
+
   Future<void> reset() async {
     await initialize();
     await _queue;
+    await _clearUndoSnapshot();
     await _persist({
       'version': 1,
       'attempts': <dynamic>[],
@@ -783,15 +871,7 @@ class AppStore extends ChangeNotifier {
     data['backup_at'] = DateTime.tryParse((data['saved_at'] as String?) ?? '')
         ?.toIso8601String();
     data['pending_changes'] = 0;
-    // Keep the previous local state for recovery before replacing it.
-    if (!memoryOnly) {
-      final old = _storage!.getString(localKey);
-      if (old != null &&
-          !await _storage!.setString('synthdex.before_restore', old)) {
-        throw StateError('Could not preserve previous local data.');
-      }
-    }
-    await _persist(data, change: false);
+    await replaceLocal(data, ReplacementKind.restore, change: false);
   }
 
   Future<DateTime?> cloudBackupAt() async {
@@ -827,46 +907,51 @@ class ProgressImport {
 
   /// Restores the file's attempts, favorites and cards, either replacing the
   /// local set or merging into it. Preferences and backup metadata are kept.
-  Future<void> apply({required bool merge}) => _store._mutate((local) {
+  /// Replacing keeps the previous document so [AppStore.undoReplacement] can
+  /// undo it.
+  Future<void> apply({required bool merge}) {
     if (!merge) {
-      local['attempts'] = _attempts;
-      local['favorites'] = _favorites;
-      local['cards'] = _cards;
-      return;
+      final next = _store.snapshot();
+      next['attempts'] = _attempts;
+      next['favorites'] = _favorites;
+      next['cards'] = _cards;
+      return _store.replaceLocal(next, ReplacementKind.import, change: true);
     }
-    final attemptsById = {
-      for (final raw in local['attempts'] as List)
-        (raw as Map)['id']: Map<String, dynamic>.from(raw),
-    };
-    for (final raw in _attempts) {
-      attemptsById.putIfAbsent(raw['id'], () => raw);
-    }
-    local['attempts'] = attemptsById.values.toList();
-    local['favorites'] = <String>{
-      ...(local['favorites'] as List).cast<String>(),
-      ..._favorites,
-    }.toList();
-    final cards = <int, CollectedCard>{
-      for (final raw in local['cards'] as List)
-        (raw as Map)['card_id'] as int: CollectedCard.fromJson(
-          Map<String, dynamic>.from(raw),
-        ),
-    };
-    for (final raw in _cards) {
-      final card = CollectedCard.fromJson(raw);
-      final existing = cards[card.cardId];
-      final owned = card.owned || (existing?.owned ?? false);
-      final wishlist = card.wishlist || (existing?.wishlist ?? false);
-      if (owned || wishlist) {
-        cards[card.cardId] = CollectedCard(
-          card.cardId,
-          owned: owned,
-          wishlist: wishlist,
-        );
+    return _store._mutate((local) {
+      final attemptsById = {
+        for (final raw in local['attempts'] as List)
+          (raw as Map)['id']: Map<String, dynamic>.from(raw),
+      };
+      for (final raw in _attempts) {
+        attemptsById.putIfAbsent(raw['id'], () => raw);
       }
-    }
-    local['cards'] = cards.values.map((card) => card.toJson()).toList();
-  });
+      local['attempts'] = attemptsById.values.toList();
+      local['favorites'] = <String>{
+        ...(local['favorites'] as List).cast<String>(),
+        ..._favorites,
+      }.toList();
+      final cards = <int, CollectedCard>{
+        for (final raw in local['cards'] as List)
+          (raw as Map)['card_id'] as int: CollectedCard.fromJson(
+            Map<String, dynamic>.from(raw),
+          ),
+      };
+      for (final raw in _cards) {
+        final card = CollectedCard.fromJson(raw);
+        final existing = cards[card.cardId];
+        final owned = card.owned || (existing?.owned ?? false);
+        final wishlist = card.wishlist || (existing?.wishlist ?? false);
+        if (owned || wishlist) {
+          cards[card.cardId] = CollectedCard(
+            card.cardId,
+            owned: owned,
+            wishlist: wishlist,
+          );
+        }
+      }
+      local['cards'] = cards.values.map((card) => card.toJson()).toList();
+    });
+  }
 }
 
 class _ChartProgress {
