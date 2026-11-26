@@ -10,15 +10,11 @@ void main() {
   test(
     'progress export is versioned, pinned and mirrors the local progress',
     () async {
-      final provenance =
-          jsonDecode(
-                File('tools/catalog-source/provenance.json').readAsStringSync(),
-              )
-              as Map<String, dynamic>;
+      final provenance = jsonDecode(
+        File('tools/catalog-source/provenance.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
       final store = AppStore(null, memoryOnly: true);
-      final song = bundledSongs.firstWhere(
-        (s) => s.available && s.hasChart(3),
-      );
+      final song = bundledSongs.firstWhere((s) => s.available && s.hasChart(3));
       await store.save(song, 3, 2, 1234);
       await store.clear(song, 3);
       await store.favorite(song);
