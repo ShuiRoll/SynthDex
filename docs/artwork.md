@@ -19,6 +19,7 @@ The default is `https://storage.sekai.best/sekai-en-assets` (`artworkBase` in
 | Song jacket | `{base}/music/jacket/{bundle}/{bundle}.webp` | `jacketUrl(bundle)` |
 | Card, original | `{base}/character/member/{bundle}/card_normal.webp` | `cardArtUrl(bundle)` |
 | Card, trained | `{base}/character/member/{bundle}/card_after_training.webp` | `cardArtUrl(bundle, trained: true)` |
+| Character portrait | `{base}/character/character_select/chr_tl_{id}.webp` | `characterPortraitUrl(id)` |
 
 An empty bundle yields `null`, and the widget renders its placeholder rather than
 requesting an invalid URL.

@@ -174,10 +174,26 @@ class AppStore extends ChangeNotifier {
   Future<void>? _initialization;
   Future<void> _queue = Future.value();
   bool _unreadable = false;
-  List<Song> catalog = List.of(bundledSongs);
+  List<Song> _catalog = List.of(bundledSongs);
+  List<Song>? _availableSongsCache;
+  Map<String, Song>? _songsByIdCache;
+  List<Song> get catalog => _catalog;
+  set catalog(List<Song> value) {
+    _catalog = value;
+    _availableSongsCache = null;
+    _songsByIdCache = null;
+  }
+
   List<CharacterCard> cardCatalog = List.of(gameCards);
-  List<Song> get songs => catalog.where((song) => song.available).toList();
-  Song songById(String id) => catalog.firstWhere((song) => song.id == id);
+  List<Song> get songs => _availableSongsCache ??= UnmodifiableListView(
+    _catalog.where((song) => song.available).toList(),
+  );
+  Song songById(String id) {
+    final map = _songsByIdCache ??= {for (final s in _catalog) s.id: s};
+    final song = map[id];
+    if (song == null) throw StateError('Unknown song id: $id');
+    return song;
+  }
 
   /// Remote rows win, while earlier rows are retained so a collection that
   /// references a card the server no longer lists stays readable and valid.

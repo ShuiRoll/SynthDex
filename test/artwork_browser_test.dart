@@ -9,6 +9,7 @@ import 'package:synthdex/src/artwork.dart';
 void main() {
   for (final entry in <String, String>{
     'song jacket': jacketUrl('jacket_s_001')!,
+    'character portrait': characterPortraitUrl(1)!,
     'original card': cardArtUrl('res001_no001')!,
     'trained card': cardArtUrl('res001_no004', trained: true)!,
     'recent card': cardArtUrl('res008_no049')!,

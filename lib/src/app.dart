@@ -1,13 +1,21 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'store.dart';
 import 'account_panel.dart';
-import 'character_collection.dart';
 import 'artwork.dart';
+import 'character_collection.dart';
 import 'export_file.dart';
 import 'import_file.dart';
+import 'pjsk_ui.dart';
+import 'store.dart';
 import 'themes.dart';
+
+
+part 'score_plot.dart';
+part 'screens/library_screens.dart';
+part 'screens/progress_screens.dart';
+part 'screens/account_screens.dart';
 
 Widget gap([double h = 20]) => SizedBox(height: h);
 String statusName(int s) => s < 0 ? 'Untracked' : statuses[s];
@@ -30,6 +38,8 @@ class SynthDexApp extends StatelessWidget {
       theme: buildAppTheme(store.theme, Brightness.light),
       darkTheme: buildAppTheme(store.theme, Brightness.dark),
       themeMode: appearanceMode(store.appearance),
+      themeAnimationDuration: const Duration(milliseconds: 280),
+      themeAnimationCurve: Curves.easeOutCubic,
       home: AccountGate(
         accounts: store.accounts,
         child: Hub(store: store),
@@ -47,72 +57,74 @@ class Hub extends StatefulWidget {
 
 class _HubState extends State<Hub> {
   ColorScheme get scheme => Theme.of(context).colorScheme;
+  PjskTokens get tokens => PjskTokens.of(context);
   Color get bg => Theme.of(context).scaffoldBackgroundColor;
-  Color get panel => scheme.surfaceContainer;
+  Color get panel =>
+      scheme.surfaceContainer.withValues(alpha: tokens.isDark ? 0.90 : 0.96);
   Color get muted => scheme.onSurfaceVariant;
   Color get purple => scheme.primary;
-  Color get teal => scheme.secondary;
-  Color get pink => scheme.tertiary;
-  Color statusColor(int s) => s == 3
-      ? teal
-      : s == 2
-      ? pink
-      : s == 1
-      ? purple
-      : muted;
+  Color get teal => tokens.aqua;
+  Color get pink => tokens.pink;
+  Color statusColor(int s) => tokens.lampColor(s, muted);
 
   Widget label(String s, {Color? color}) => Text(
     s,
     style: TextStyle(
       fontSize: 11,
-      fontWeight: FontWeight.w700,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.9,
       color: color ?? muted,
     ),
   );
 
-  Widget box(Widget child, {Color? color, double padding = 18}) => Container(
-    width: double.infinity,
-    padding: EdgeInsets.all(padding),
-    decoration: BoxDecoration(
-      color: color ?? panel,
-      borderRadius: BorderRadius.circular(18),
-    ),
-    child: child,
-  );
-  Widget heading(String eyebrow, String title, String sub) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      label(eyebrow, color: teal),
-      gap(18),
-      Text(title, style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold)),
-      gap(10),
-      Text(sub, style: TextStyle(color: muted, fontSize: 12)),
-      gap(26),
-    ],
-  );
+  Widget box(
+    Widget child, {
+    Color? color,
+    double padding = 18,
+    bool prism = false,
+  }) {
+    if (prism) {
+      return PjskPrismCard(
+        padding: EdgeInsets.all(padding),
+        backgroundColor: color ?? panel,
+        rainbowOpacity: 0.55,
+        child: child,
+      );
+    }
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(padding),
+      decoration: BoxDecoration(
+        color: color ?? panel,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(
+            alpha: tokens.isDark ? 0.55 : 0.65,
+          ),
+        ),
+      ),
+      child: child,
+    );
+  }
+
+  Widget heading(String eyebrow, String title, String sub) =>
+      PjskPageHeader(eyebrow: eyebrow, title: title, subtitle: sub);
+
   Widget action(
     String text,
     VoidCallback? tap, {
     bool secondary = false,
-  }) => SizedBox(
-    width: double.infinity,
-    child: FilledButton(
-      style: FilledButton.styleFrom(
-        backgroundColor: secondary ? scheme.surfaceContainerHighest : purple,
-        foregroundColor: secondary ? scheme.onSurface : scheme.onPrimary,
-        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      ),
-      onPressed: tap,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(text, style: TextStyle(fontWeight: FontWeight.bold)),
-      ),
-    ),
+    IconData? icon,
+  }) => PjskGlossyButton(
+    label: text,
+    onPressed: tap,
+    secondary: secondary,
+    icon: icon,
   );
 
   AppStore get s => widget.store;
   int tab = 0;
+  int navDirection = 1;
   int visibleSongs = 50;
   String page = '', query = '', unit = 'All units', sort = 'Title A–Z';
   int? difficulty, filterStatus;
@@ -122,9 +134,10 @@ class _HubState extends State<Hub> {
   Attempt? editing;
   final score = TextEditingController();
   final search = TextEditingController();
-  final email = TextEditingController(),
-      password = TextEditingController(),
-      displayName = TextEditingController();
+  final displayName = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  int _settingsReturnTab = 5;
+  String _settingsReturnPage = 'account';
   String? formError;
   @override
   void initState() {
@@ -134,6 +147,10 @@ class _HubState extends State<Hub> {
     s.refresh();
   }
 
+  String settingsTheme = 'dark', settingsAppearance = 'system';
+  bool importingProgress = false;
+  void _update(VoidCallback fn) => setState(fn);
+
   void changed() {
     if (mounted) setState(() {});
   }
@@ -142,15 +159,42 @@ class _HubState extends State<Hub> {
   void dispose() {
     s.removeListener(changed);
     s.accounts.removeListener(changed);
-    for (final c in [score, search, email, password, displayName]) {
+    for (final c in [score, search, displayName]) {
       c.dispose();
     }
+    _scroll.dispose();
     super.dispose();
   }
 
-  void go(String next) => setState(() {
+  int _pageDepth(String p) => switch (p) {
+    '' || 'account' => 0,
+    'filter' || 'detail' || 'allHistory' || 'settings' || 'login' => 1,
+    'record' || 'history' => 2,
+    'compare' => 3,
+    _ => 1,
+  };
+
+  void go(String next, {int? targetTab}) => setState(() {
+    final prevTab = tab;
+    final prevPage = page;
+    if (next == 'settings' && prevPage != 'settings') {
+      _settingsReturnTab = prevTab;
+      _settingsReturnPage = prevPage;
+    }
+    final nextTab =
+        targetTab ??
+        ((next == 'account' || next == 'settings' || next == 'login')
+            ? 5
+            : tab);
+    if (next == 'account' && prevTab != 5) {
+      navDirection = 5 > prevTab ? 1 : -1;
+    } else if (targetTab != null && targetTab != prevTab) {
+      navDirection = -1;
+    } else {
+      navDirection = _pageDepth(next) >= _pageDepth(prevPage) ? 1 : -1;
+    }
     page = next;
-    if (next == 'account' || next == 'settings' || next == 'login') tab = 5;
+    tab = nextTab;
     formError = null;
     if (next == 'account' || next == 'settings') {
       chart = s.defaultDifficulty;
@@ -159,20 +203,72 @@ class _HubState extends State<Hub> {
       settingsAppearance = s.appearance;
     }
   });
+  void _handleBack() {
+    if (busy) return;
+    if (page == 'settings') {
+      go(_settingsReturnPage, targetTab: _settingsReturnTab);
+      return;
+    }
+    go(
+      page == 'record' || page == 'history'
+          ? 'detail'
+          : page == 'compare'
+          ? 'history'
+          : page == 'login'
+          ? 'account'
+          : '',
+    );
+  }
+
   void navigate(int i) {
     if (i == 5) {
+      if (tab == 5 && page == 'account') {
+        _scrollToTop();
+        return;
+      }
       go('account');
       return;
     }
+    if (i == tab && page.isEmpty) {
+      _scrollToTop();
+      return;
+    }
     setState(() {
+      if (i != tab) {
+        navDirection = i > tab ? 1 : -1;
+      } else if (page.isNotEmpty) {
+        navDirection = -1;
+      }
       tab = i;
       page = '';
       formError = null;
     });
   }
 
-  void toast(String text) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  void _scrollToTop() {
+    if (_scroll.hasClients && _scroll.offset > 0) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  void toast(String text) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: tokens.isDark
+          ? const Color(0xFF162447)
+          : const Color(0xFF0E1B3A),
+      content: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ),
+  );
   Future<void> run(Future<void> Function() work, {String? success}) async {
     if (busy) return;
     setState(() {
@@ -217,108 +313,213 @@ class _HubState extends State<Hub> {
     go('record');
   }
 
-  Widget chip(String text, bool active, VoidCallback tap) => ChoiceChip(
-    label: Text(
-      text,
-      style: TextStyle(
-        fontSize: 11,
-        color: active ? scheme.onPrimaryContainer : muted,
+  Widget chip(String text, bool active, VoidCallback tap, {Color? accent}) {
+    final activeColor = accent ?? (tokens.isDark ? tokens.aqua : scheme.primary);
+    return ChoiceChip(
+      label: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+          color: active
+              ? (tokens.isDark ? Colors.white : scheme.onSurface)
+              : muted,
+        ),
       ),
-    ),
-    selected: active,
-    onSelected: (_) => tap(),
-    showCheckmark: false,
-    selectedColor: scheme.primaryContainer,
-    backgroundColor: scheme.surfaceContainerHighest,
-    side: BorderSide.none,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
-  );
-  Widget songRow(Song song, {String? subtitle, int? chartDifficulty}) {
+      selected: active,
+      onSelected: (_) => tap(),
+      showCheckmark: false,
+      selectedColor: activeColor.withValues(alpha: tokens.isDark ? 0.24 : 0.16),
+      backgroundColor: tokens.isDark
+          ? scheme.surfaceContainerHighest.withValues(alpha: 0.65)
+          : scheme.surfaceContainer,
+      side: BorderSide(
+        color: active
+            ? activeColor.withValues(alpha: 0.85)
+            : scheme.outlineVariant.withValues(alpha: 0.55),
+        width: active ? 1.3 : 1,
+      ),
+      shape: const StadiumBorder(),
+    );
+  }
+
+  List<(int, int)> _songLamps(Song song) => [
+    for (final d in song.chartDifficulties) (d, s.status(song.id, d)),
+  ];
+
+  Widget songRow(
+    Song song, {
+    String? subtitle,
+    int? chartDifficulty,
+    int? overrideStatus,
+    int? staggerIndex,
+  }) {
     final preferred = chartDifficulty ?? difficulty ?? s.defaultDifficulty;
     final d = song.hasChart(preferred)
         ? preferred
         : song.chartDifficulties.first;
-    return Padding(
-      padding: EdgeInsets.only(bottom: 11),
-      child: Material(
-        color: panel,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () {
-            openSong(song);
-            setState(() => chart = d);
-          },
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(12, 11, 4, 11),
-            child: Row(
-              children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: Color(song.color),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: ArtworkImage(
-                    url: jacketUrl(song.assetBundle),
-                    label: '${song.title} jacket',
-                    icon: Icons.music_note,
-                  ),
-                ),
-                SizedBox(width: 13),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        song.title,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
+    final st = overrideStatus ?? s.status(song.id, d);
+    final unitColor = PjskTokens.unitColor(song.unit);
+    final fav = s.favorites.contains(song.id);
+
+    final rowCard = PjskPressScale(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: fav
+                  ? tokens.pink.withValues(alpha: 0.45)
+                  : scheme.outlineVariant.withValues(
+                      alpha: tokens.isDark ? 0.52 : 0.65,
+                    ),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                openSong(song);
+                setState(() => chart = d);
+              },
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Official PJSK unit-colored left EnergyRail
+                    Container(width: 4, color: unitColor),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(11, 10, 4, 10),
+                        child: Row(
+                          children: [
+                            // White-beveled song jacket
+                            Container(
+                              width: 50,
+                              height: 50,
+                              padding: const EdgeInsets.all(1.5),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.white.withValues(
+                                    alpha: tokens.isDark ? 0.35 : 0.9,
+                                  ),
+                                  width: 1.2,
+                                ),
+                                color: Color(song.color),
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: ArtworkImage(
+                                  url: jacketUrl(song.assetBundle),
+                                  label: '${song.title} jacket',
+                                  icon: Icons.music_note_rounded,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    song.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${song.artist} · ${song.unit}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: muted,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  PjskSixLampStrip(
+                                    statusesByDifficulty: _songLamps(song),
+                                    size: 6.5,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 4,
+                                    children: [
+                                      PjskDifficultyBadge(
+                                        difficulty: d,
+                                        label:
+                                            '${difficulties[d].toUpperCase()} · Lv. ${song.levels[d]}',
+                                      ),
+                                      PjskStatusLamp(
+                                        status: st,
+                                        label: statusName(st).toUpperCase(),
+                                      ),
+                                    ],
+                                  ),
+                                  if (subtitle != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: muted,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: fav ? 'Remove favorite' : 'Add favorite',
+                              onPressed: busy
+                                  ? null
+                                  : () {
+                                      run(() => s.favorite(song));
+                                    },
+                              icon: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 200),
+                                switchInCurve: Curves.easeOutBack,
+                                transitionBuilder: (child, anim) =>
+                                    ScaleTransition(scale: anim, child: child),
+                                child: Icon(
+                                  fav
+                                      ? Icons.favorite_rounded
+                                      : Icons.favorite_border_rounded,
+                                  key: ValueKey('fav-${song.id}-$fav'),
+                                  color: fav ? tokens.pink : muted,
+                                  size: 21,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      gap(6),
-                      Text(
-                        song.unit,
-                        style: TextStyle(fontSize: 11, color: muted),
-                      ),
-                      gap(6),
-                      Text(
-                        subtitle ??
-                            '${difficulties[d].toUpperCase()} · ${statusName(s.status(song.id, d)).toUpperCase()}',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: teal,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                IconButton(
-                  tooltip: s.favorites.contains(song.id)
-                      ? 'Remove favorite'
-                      : 'Add favorite',
-                  onPressed: busy
-                      ? null
-                      : () {
-                          run(() => s.favorite(song));
-                        },
-                  icon: Icon(
-                    s.favorites.contains(song.id)
-                        ? Icons.favorite
-                        : Icons.favorite_border,
-                    color: s.favorites.contains(song.id) ? pink : muted,
-                    size: 21,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+    if (staggerIndex != null) {
+      return PjskStaggerItem(index: staggerIndex, child: rowCard);
+    }
+    return rowCard;
   }
 
   Widget totals({bool stats = false}) {
@@ -327,42 +528,52 @@ class _HubState extends State<Hub> {
         ratio = total == 0 ? 0.0 : cleared / total;
     return Column(
       children: [
-        box(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        PjskPrismCard(
+          gradient: tokens.heroGradient,
+          showArtOverlay: true,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          child: Row(
             children: [
-              label(
-                stats ? 'TOTAL CHART COMPLETION' : 'OVERALL CHART COMPLETION',
-                color: purple,
-              ),
-              gap(10),
-              Text(
-                '${(ratio * 100).toStringAsFixed(1)}%',
-                style: TextStyle(
-                  fontSize: 44,
-                  height: 1.1,
-                  fontWeight: FontWeight.bold,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stats
+                          ? 'TOTAL CHART COMPLETION'
+                          : 'OVERALL CHART COMPLETION',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                        color: tokens.isDark ? tokens.aqua : scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${(ratio * 100).toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        fontSize: 34,
+                        height: 1.05,
+                        fontWeight: FontWeight.w800,
+                        fontStyle: FontStyle.italic,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '$cleared / $total tracked charts cleared',
+                      style: TextStyle(fontSize: 12, color: muted),
+                    ),
+                  ],
                 ),
               ),
-              gap(10),
-              Text(
-                '$cleared / $total tracked charts cleared',
-                style: TextStyle(fontSize: 12),
-              ),
-              gap(10),
-              LinearProgressIndicator(
-                value: ratio,
-                color: teal,
-                backgroundColor: scheme.primaryContainer,
-                minHeight: 7,
-                borderRadius: BorderRadius.circular(4),
-              ),
+              const SizedBox(width: 12),
+              PjskCompletionRing(ratio: ratio, size: 78),
             ],
           ),
-          color: scheme.primaryContainer,
-          padding: 20,
         ),
-        gap(18),
+        gap(14),
         Row(
           children: [
             Expanded(
@@ -370,36 +581,42 @@ class _HubState extends State<Hub> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const PjskSlashes(height: 9),
+                    const SizedBox(height: 8),
                     Text(
                       '${s.count(2)}',
                       style: TextStyle(
-                        fontSize: 27,
-                        color: pink,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 28,
+                        color: tokens.pink,
+                        fontWeight: FontWeight.w800,
+                        fontStyle: FontStyle.italic,
                       ),
                     ),
-                    gap(10),
+                    gap(4),
                     label('FULL COMBOS'),
                   ],
                 ),
                 padding: 15,
               ),
             ),
-            SizedBox(width: 24),
+            const SizedBox(width: 14),
             Expanded(
               child: box(
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const PjskSlashes(height: 9),
+                    const SizedBox(height: 8),
                     Text(
                       '${s.count(3)}',
                       style: TextStyle(
-                        fontSize: 27,
-                        color: teal,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 28,
+                        color: tokens.isDark ? tokens.aqua : scheme.primary,
+                        fontWeight: FontWeight.w800,
+                        fontStyle: FontStyle.italic,
                       ),
                     ),
-                    gap(10),
+                    gap(4),
                     label('ALL PERFECTS'),
                   ],
                 ),
@@ -408,1265 +625,11 @@ class _HubState extends State<Hub> {
             ),
           ],
         ),
-        gap(24),
+        gap(22),
       ],
     );
   }
 
-  Widget home() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'SYNTHDEX / PROJECT SEKAI',
-        'Next to play',
-        'Pick a chart, make a little progress.',
-      ),
-      label('QUICK ACTIONS'),
-      gap(10),
-      Wrap(
-        spacing: 8,
-        children: [
-          chip('Browse library', true, () => navigate(1)),
-          chip('Favorites ♡', false, () => navigate(2)),
-          chip('History ↗', false, () => go('allHistory')),
-          chip('Card collection', false, () => navigate(4)),
-        ],
-      ),
-      gap(24),
-      Text(
-        'Work on ${difficulties[s.defaultDifficulty]}',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      gap(8),
-      Text(
-        'Charts without a recorded clear. Favorites come first, then lower levels.',
-        style: TextStyle(color: muted, fontSize: 12),
-      ),
-      gap(12),
-      if (s.nextSongs.isEmpty)
-        box(
-          Text(
-            'Every available chart at this difficulty has a recorded clear. Try another difficulty in Settings.',
-            style: TextStyle(color: muted),
-          ),
-        ),
-      ...s.nextSongs.map(
-        (song) => songRow(
-          song,
-          chartDifficulty: s.defaultDifficulty,
-          subtitle:
-              '${difficulties[s.defaultDifficulty].toUpperCase()} · LV. ${song.levels[s.defaultDifficulty]} · ${statusName(s.status(song.id, s.defaultDifficulty)).toUpperCase()}',
-        ),
-      ),
-      gap(24),
-      Text(
-        'Latest activity',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      gap(12),
-      if (s.attempts.isEmpty)
-        box(
-          Text(
-            'Your next milestone starts here. Open a song and save your first attempt.',
-            style: TextStyle(color: muted),
-          ),
-        ),
-      ...s.recentAttempts.map(
-        (attempt) => songRow(
-          s.songById(attempt.songId),
-          chartDifficulty: attempt.difficulty,
-          subtitle:
-              '${difficulties[attempt.difficulty]} · ${statusName(attempt.status)}${attempt.active ? '' : ' · Archived'} · ${attempt.date.toLocal().toString().substring(0, 10)}',
-        ),
-      ),
-    ],
-  );
-  List<Song> get filtered {
-    final list = s.songs.where((song) {
-      if ((tab == 2 || onlyFavorites) && !s.favorites.contains(song.id)) {
-        return false;
-      }
-      if (!'${song.title} ${song.artist} ${song.unit} ${song.searchAlias}'
-          .toLowerCase()
-          .contains(query.toLowerCase())) {
-        return false;
-      }
-      if (unit != 'All units' && !song.unitNames.contains(unit)) return false;
-      final ds = difficulty == null ? song.chartDifficulties : [difficulty!];
-      return ds.any(
-        (d) =>
-            song.hasChart(d) &&
-            (filterStatus == null || s.status(song.id, d) == filterStatus) &&
-            (!missingFc || s.status(song.id, d) < 2),
-      );
-    }).toList();
-    list.sort(
-      (a, b) => sort == 'Title Z–A'
-          ? b.title.compareTo(a.title)
-          : sort == 'Level high–low'
-          ? b.levels[difficulty ?? 3].compareTo(a.levels[difficulty ?? 3])
-          : a.title.compareTo(b.title),
-    );
-    return list;
-  }
-
-  Widget library() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        tab == 2 ? 'YOUR COLLECTION' : 'PRELOADED SONG CATALOG',
-        tab == 2 ? 'Favorite songs' : 'Song library',
-        tab == 2
-            ? 'Your bookmarked charts, one tap away.'
-            : 'Find a chart and track your best.',
-      ),
-      if (tab == 2) ...[
-        box(
-          Text(
-            '♥  ${s.favorites.length} SAVED SONGS',
-            style: TextStyle(
-              color: pink,
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          color: scheme.primaryContainer,
-        ),
-        gap(),
-      ],
-      label('SEARCH SONGS'),
-      gap(8),
-      TextField(
-        controller: search,
-        onChanged: (v) => setState(() => query = v),
-        decoration: InputDecoration(
-          hintText: 'Title, artist or unit…',
-          prefixIcon: Icon(Icons.search, size: 18),
-        ),
-      ),
-      gap(12),
-      Wrap(
-        spacing: 8,
-        children: [
-          chip(
-            tab == 2 ? 'All favorites' : 'All songs',
-            !onlyFavorites && !missingFc,
-            () => setState(() {
-              onlyFavorites = false;
-              missingFc = false;
-            }),
-          ),
-          if (tab != 2)
-            chip(
-              'Favorites ♥',
-              onlyFavorites,
-              () => setState(() => onlyFavorites = !onlyFavorites),
-            ),
-          chip(
-            'Not FC',
-            missingFc,
-            () => setState(() => missingFc = !missingFc),
-          ),
-          ActionChip(
-            tooltip: 'Filter and sort',
-            label: Icon(Icons.tune, size: 16),
-            backgroundColor: scheme.surfaceContainerHighest,
-            side: BorderSide.none,
-            padding: EdgeInsets.zero,
-            onPressed: () => go('filter'),
-          ),
-        ],
-      ),
-      gap(12),
-      label('${filtered.length} songs · $catalogRegion catalog'),
-      Text(
-        'Sekai Viewer · snapshot $catalogAsOf',
-        style: TextStyle(color: muted, fontSize: 11),
-      ),
-      gap(14),
-      if (filtered.isEmpty)
-        box(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('No songs found'),
-              gap(8),
-              Text(
-                'Try another filter or add favorites from the library.',
-                style: TextStyle(color: muted),
-              ),
-            ],
-          ),
-        ),
-      ...filtered.take(visibleSongs).map((song) => songRow(song)),
-      if (filtered.length > visibleSongs)
-        action(
-          'Show more songs (${filtered.length - visibleSongs} remaining)',
-          () => setState(() => visibleSongs += 50),
-          secondary: true,
-        ),
-      if (tab == 2) ...[
-        gap(),
-        box(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Manage your favorites'),
-              gap(8),
-              Text(
-                'Tap ♥ on any song to add or remove it.',
-                style: TextStyle(color: muted, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-        gap(),
-        action('Explore song library', () => navigate(1), secondary: true),
-      ],
-    ],
-  );
-  Widget filters() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'LIBRARY CONTROLS',
-        'Filter & sort',
-        'Narrow down the charts you need.',
-      ),
-      label('FILTER BY UNIT'),
-      gap(10),
-      Wrap(
-        spacing: 8,
-        children: ['All units', ...s.songs.expand((x) => x.unitNames).toSet()]
-            .map((x) => chip(x, unit == x, () => setState(() => unit = x)))
-            .toList(),
-      ),
-      gap(24),
-      label('DIFFICULTY'),
-      gap(10),
-      Wrap(
-        spacing: 8,
-        children: [
-          chip(
-            'All',
-            difficulty == null,
-            () => setState(() => difficulty = null),
-          ),
-          ...List.generate(
-            difficulties.length,
-            (d) => chip(
-              difficulties[d],
-              difficulty == d,
-              () => setState(() => difficulty = d),
-            ),
-          ),
-        ],
-      ),
-      gap(24),
-      label('PROGRESS STATUS'),
-      gap(10),
-      Wrap(
-        spacing: 8,
-        children: [
-          chip(
-            'All',
-            filterStatus == null,
-            () => setState(() => filterStatus = null),
-          ),
-          ...List.generate(5, (i) {
-            final n = i - 1;
-            return chip(
-              statusName(n),
-              filterStatus == n,
-              () => setState(() => filterStatus = n),
-            );
-          }),
-        ],
-      ),
-      gap(24),
-      label('SORT BY'),
-      gap(10),
-      DropdownButtonFormField<String>(
-        initialValue: sort,
-        items: [
-          'Title A–Z',
-          'Title Z–A',
-          'Level high–low',
-        ].map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
-        onChanged: (v) => setState(() => sort = v!),
-      ),
-      gap(32),
-      action('Apply filters', () => go('')),
-      TextButton(
-        onPressed: () => setState(() {
-          difficulty = null;
-          filterStatus = null;
-          unit = 'All units';
-          sort = 'Title A–Z';
-          missingFc = false;
-          onlyFavorites = false;
-          query = '';
-          search.clear();
-        }),
-        child: Text('Reset all filters'),
-      ),
-    ],
-  );
-  Widget detail() {
-    final song = selected!;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        heading('SONG DETAILS', song.title, '${song.unit} · Project SEKAI'),
-        box(
-          Row(
-            children: [
-              Container(
-                width: 89,
-                height: 89,
-                decoration: BoxDecoration(
-                  color: Color(song.color),
-                  borderRadius: BorderRadius.circular(17),
-                ),
-                child: InkWell(
-                  onTap: () =>
-                      showJacket(context, song.assetBundle, song.title),
-                  child: ArtworkImage(
-                    url: jacketUrl(song.assetBundle),
-                    label: '${song.title} jacket',
-                    icon: Icons.music_note,
-                  ),
-                ),
-              ),
-              SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      song.title,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: busy
-                          ? null
-                          : () {
-                              run(() => s.favorite(song));
-                            },
-                      child: Text(
-                        s.favorites.contains(song.id)
-                            ? '♥ Favorite'
-                            : '♡ Add favorite',
-                        style: TextStyle(color: pink),
-                      ),
-                    ),
-                    Text(
-                      '${song.chartDifficulties.length} difficulty charts',
-                      style: TextStyle(color: muted, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          color: scheme.primaryContainer,
-        ),
-        gap(28),
-        Text(
-          'Select difficulty',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        gap(14),
-        ...song.chartDifficulties.map(
-          (d) => Padding(
-            padding: EdgeInsets.only(bottom: 8),
-            child: Material(
-              color: chart == d ? scheme.primaryContainer : panel,
-              borderRadius: BorderRadius.circular(14),
-              child: ListTile(
-                dense: true,
-                onTap: () => setState(() => chart = d),
-                title: Text(
-                  '${difficulties[d].toUpperCase()}  Lv. ${song.levels[d]}',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-                trailing: Text(
-                  statusName(s.status(song.id, d)).toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: statusColor(s.status(song.id, d)),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        gap(24),
-        action('Record or update selected chart', () => openRecord()),
-        gap(10),
-        action('View progress history', () => go('history'), secondary: true),
-      ],
-    );
-  }
-
-  Widget record() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'CHART RECORD',
-        editing == null ? 'Edit progress' : 'Edit attempt',
-        '${selected!.title} · ${difficulties[chart]} · Lv. ${selected!.levels[chart]}',
-      ),
-      label('CURRENT BEST SCORE'),
-      gap(8),
-      box(Text(number(s.best(selected!.id, chart))), padding: 14),
-      gap(26),
-      label('SELECT COMPLETION STATUS'),
-      gap(14),
-      ...List.generate(
-        4,
-        (i) => Padding(
-          padding: EdgeInsets.only(bottom: 8),
-          child: Material(
-            color: chosenStatus == i ? scheme.primaryContainer : panel,
-            borderRadius: BorderRadius.circular(14),
-            child: ListTile(
-              onTap: () => setState(() => chosenStatus = i),
-              leading: Text(
-                ['○', '✓', '★', '✦'][i],
-                style: TextStyle(fontSize: 22, color: statusColor(i)),
-              ),
-              title: Text(statuses[i], style: TextStyle(fontSize: 14)),
-              trailing: Icon(
-                chosenStatus == i
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_off,
-                color: chosenStatus == i ? statusColor(i) : muted,
-                size: 20,
-              ),
-            ),
-          ),
-        ),
-      ),
-      gap(20),
-      label('NEW SCORE (OPTIONAL)'),
-      gap(8),
-      TextField(
-        controller: score,
-        keyboardType: TextInputType.number,
-        decoration: InputDecoration(
-          hintText: 'Enter score',
-          helperText: 'Whole number, zero or greater',
-          errorText: formError,
-        ),
-      ),
-      gap(22),
-      Text(
-        'ⓘ  Saving a new attempt preserves score history.',
-        style: TextStyle(fontSize: 11, color: muted),
-      ),
-      gap(24),
-      action(
-        busy
-            ? 'Saving…'
-            : editing == null
-            ? 'Save new record'
-            : 'Save changes',
-        busy
-            ? null
-            : () {
-                final raw = score.text.trim().replaceAll(',', '');
-                final value = raw.isEmpty ? null : int.tryParse(raw);
-                if (raw.isNotEmpty &&
-                    (value == null || value < 0 || value > 2147483647)) {
-                  setState(
-                    () => formError = 'Enter a valid, non-negative score.',
-                  );
-                  return;
-                }
-                run(() async {
-                  await s.save(
-                    selected!,
-                    chart,
-                    chosenStatus,
-                    value,
-                    attemptId: editing?.id,
-                  );
-                  go('history');
-                }, success: 'Progress saved');
-              },
-      ),
-      gap(8),
-      if (editing == null)
-        TextButton(
-          onPressed: busy ? null : deleteCurrent,
-          child: Text('Delete current record', style: TextStyle(color: pink)),
-        ),
-      if (editing != null)
-        TextButton(
-          onPressed: busy
-              ? null
-              : () async {
-                  final yes = await confirm(
-                    'Delete this attempt?',
-                    'This permanently removes this attempt from local history. Statistics will be recalculated.',
-                    'Delete attempt',
-                  );
-                  if (yes && mounted) {
-                    await run(() async {
-                      await s.deleteAttempt(editing!.id);
-                      go('history');
-                    }, success: 'Attempt deleted.');
-                  }
-                },
-          child: Text('Delete this attempt', style: TextStyle(color: pink)),
-        ),
-      TextButton(
-        onPressed: busy ? null : () => go('history'),
-        child: Text('View history & comparison'),
-      ),
-    ],
-  );
-  Future<void> deleteCurrent() async {
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete this progress record?'),
-        content: Text(
-          'This clears the selected current record. Past attempts remain in history.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Delete record', style: TextStyle(color: pink)),
-          ),
-        ],
-      ),
-    );
-    if (yes == true && mounted) {
-      run(() async {
-        await s.clear(selected!, chart);
-        go('detail');
-      }, success: 'Current record cleared. History preserved.');
-    }
-  }
-
-  Widget history({bool all = false}) {
-    final records = all ? s.attempts.toList() : s.history(selected!.id, chart);
-    records.sort(
-      (a, b) => newest ? b.date.compareTo(a.date) : a.date.compareTo(b.date),
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        heading(
-          'SCORE RECORDS',
-          'Progress history',
-          all
-              ? 'All your recorded attempts'
-              : '${selected!.title} · ${difficulties[chart]}',
-        ),
-        if (!all) ...[
-          box(
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                label('PERSONAL BEST', color: purple),
-                gap(10),
-                Text(
-                  number(s.best(selected!.id, chart)),
-                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
-                ),
-                gap(8),
-                label('${records.length} recorded attempts', color: teal),
-              ],
-            ),
-            color: scheme.primaryContainer,
-          ),
-          gap(22),
-        ],
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Attempt timeline',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            TextButton(
-              onPressed: () => setState(() => newest = !newest),
-              child: Text(newest ? 'Newest first' : 'Oldest first'),
-            ),
-          ],
-        ),
-        gap(12),
-        if (records.isEmpty)
-          box(
-            Text(
-              'No history yet. Save your first attempt to start comparing.',
-              style: TextStyle(color: muted),
-            ),
-          ),
-        ...records.map(
-          (a) => Padding(
-            padding: EdgeInsets.only(bottom: 10),
-            child: Material(
-              color: panel,
-              borderRadius: BorderRadius.circular(14),
-              child: ListTile(
-                onTap: () {
-                  selected = s.songById(a.songId);
-                  chart = a.difficulty;
-                  openRecord(attempt: a);
-                },
-                title: Text(
-                  all
-                      ? s.songById(a.songId).title
-                      : a.date.toLocal().toString().substring(0, 16),
-                  style: TextStyle(fontSize: 12, color: muted),
-                ),
-                subtitle: Text(
-                  number(a.score),
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: scheme.onSurface,
-                  ),
-                ),
-                trailing: Text(
-                  statuses[a.status].toUpperCase(),
-                  style: TextStyle(fontSize: 10, color: statusColor(a.status)),
-                ),
-              ),
-            ),
-          ),
-        ),
-        gap(20),
-        if (!all)
-          action(
-            'Compare latest vs previous',
-            records.length < 2 ? null : () => go('compare'),
-            secondary: true,
-          ),
-      ],
-    );
-  }
-
-  Widget comparison() {
-    final records = s.history(selected!.id, chart);
-    if (records.length < 2) return history();
-    final current = records[0], previous = records[1];
-    final delta = current.score == null || previous.score == null
-        ? null
-        : current.score! - previous.score!;
-    Widget metric(String title, Attempt a) => box(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          label(title),
-          gap(25),
-          FittedBox(
-            child: Text(
-              number(a.score),
-              style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
-            ),
-          ),
-          gap(25),
-          Text(
-            statuses[a.status],
-            style: TextStyle(color: statusColor(a.status), fontSize: 12),
-          ),
-        ],
-      ),
-      color: title == 'CURRENT' ? scheme.primaryContainer : panel,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        heading(
-          'PROGRESS INSIGHTS',
-          'Record comparison',
-          '${selected!.title} · ${difficulties[chart]}',
-        ),
-        Row(
-          children: [
-            Expanded(child: metric('PREVIOUS', previous)),
-            SizedBox(width: 19),
-            Expanded(child: metric('CURRENT', current)),
-          ],
-        ),
-        gap(24),
-        box(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              label('SCORE CHANGE'),
-              gap(12),
-              Text(
-                delta == null
-                    ? 'No score recorded'
-                    : '${delta >= 0 ? '+' : ''}${number(delta)}',
-                style: TextStyle(
-                  fontSize: 31,
-                  color: delta != null && delta < 0 ? pink : teal,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              gap(8),
-              Text(
-                'Latest attempt compared with the previous one',
-                style: TextStyle(fontSize: 11, color: muted),
-              ),
-            ],
-          ),
-        ),
-        gap(28),
-        Text(
-          'Progress over time',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-        ),
-        gap(16),
-        box(
-          SizedBox(
-            height: 144,
-            child: CustomPaint(
-              painter: ScorePlot(
-                records.reversed
-                    .where((a) => a.score != null)
-                    .map((a) => a.score!)
-                    .toList(),
-                teal,
-                muted,
-              ),
-            ),
-          ),
-        ),
-        gap(30),
-        action('View full history', () => go('history'), secondary: true),
-      ],
-    );
-  }
-
-  Widget stats() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'YOUR PERFORMANCE',
-        'Statistics',
-        'Overall, by difficulty and history.',
-      ),
-      totals(stats: true),
-      Text(
-        'By difficulty',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      gap(18),
-      ...List.generate(difficulties.length, (d) {
-        final total = s.chartCount(d);
-        final ratio = total == 0 ? 0.0 : s.count(1, d) / total;
-        return Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(difficulties[d], style: TextStyle(fontSize: 12)),
-                label('${(ratio * 100).round()}%'),
-              ],
-            ),
-            gap(8),
-            LinearProgressIndicator(
-              value: ratio,
-              color: d == 4 ? pink : purple,
-              backgroundColor: scheme.surfaceContainerHighest,
-              minHeight: 7,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            gap(22),
-          ],
-        );
-      }),
-      action(
-        'Compare historical performance',
-        () => go('allHistory'),
-        secondary: true,
-      ),
-    ],
-  );
-  String settingsTheme = 'dark', settingsAppearance = 'system';
-  Future<bool> confirm(String title, String message, String button) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(button),
-            ),
-          ],
-        ),
-      ) ??
-      false;
-  bool importingProgress = false;
-  Future<void> importProgressAction() async {
-    if (busy || importingProgress) return;
-    setState(() => importingProgress = true);
-    String counted(int n, String noun) => '$n $noun${n == 1 ? '' : 's'}';
-    try {
-      final contents = await pickProgressFileContents();
-      if (contents == null || !mounted) return;
-      final file = await s.readProgressFile(contents);
-      if (!mounted) return;
-      final localAttempts = s.attempts.length;
-      final localFavorites = s.favorites.length;
-      final localCards = s.cardCollection.length;
-      final merge = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Import progress'),
-          content: Text(
-            'This file holds ${counted(file.attemptCount, 'attempt')}, '
-            '${counted(file.favoriteCount, 'favorite')} and '
-            '${counted(file.cardCount, 'card')}.\n\n'
-            'Replace deletes everything already on this device (currently '
-            '${counted(localAttempts, 'attempt')}, '
-            '${counted(localFavorites, 'favorite')} and '
-            '${counted(localCards, 'card')}) and keeps only the file. '
-            'Merge keeps both and adds anything missing.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Merge'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Replace'),
-            ),
-          ],
-        ),
-      );
-      if (merge == null || !mounted) return;
-      await file.apply(merge: merge);
-      if (mounted) {
-        toast(
-          'Imported ${counted(file.attemptCount, 'attempt')}, '
-          '${counted(file.favoriteCount, 'favorite')} and '
-          '${counted(file.cardCount, 'card')} '
-          '(${merge ? 'merged' : 'replaced'}).',
-        );
-      }
-    } on FormatException catch (e) {
-      if (mounted) toast(e.message);
-    } on StateError catch (e) {
-      if (mounted) toast(e.message);
-    } catch (_) {
-      if (mounted) toast('Could not import that progress file.');
-    } finally {
-      if (mounted) setState(() => importingProgress = false);
-    }
-  }
-
-  Future<void> undoReplacementAction() async {
-    final kind = s.undoableReplacement;
-    if (busy || kind == null) return;
-    final what = kind == ReplacementKind.import ? 'import' : 'cloud restore';
-    final yes = await confirm(
-      'Undo $what?',
-      'This puts back the progress this device had before the last $what and '
-          'discards what it added.',
-      'Undo',
-    );
-    if (!yes || !mounted) return;
-    try {
-      await s.undoReplacement();
-      if (mounted) {
-        toast('Restored the progress from before the last $what.');
-      }
-    } on StateError catch (e) {
-      if (mounted) toast(e.message);
-    }
-  }
-
-  Future<void> backupAction(bool restore) async {
-    if (s.accounts.username == null) {
-      s.accounts.reopen();
-      go('login');
-      return;
-    }
-    DateTime? savedAt;
-    if (restore) {
-      try {
-        savedAt = await s.cloudBackupAt();
-      } catch (_) {
-        savedAt = null;
-      }
-      if (!mounted) return;
-    }
-    final when = savedAt == null
-        ? ''
-        : ' from ${savedAt.toLocal().toString().substring(0, 16)}';
-    final yes = await confirm(
-      restore ? 'Restore cloud backup?' : 'Save cloud backup?',
-      restore
-          ? 'This replaces this device’s progress, favorites, card collection and settings with your cloud backup$when. A recovery copy is kept on this device.'
-          : 'This replaces the backup for your signed-in account with this device’s current progress, favorites, card collection and settings.',
-      restore ? 'Restore backup' : 'Save backup',
-    );
-    if (!yes || !mounted) return;
-    await run(
-      restore ? s.restoreBackup : s.saveBackup,
-      success: restore
-          ? 'Backup restored to this device.'
-          : 'Cloud backup saved.',
-    );
-    if (mounted) {
-      displayName.text = s.name;
-      setState(() {
-        chart = s.defaultDifficulty;
-        settingsTheme = s.theme;
-        settingsAppearance = s.appearance;
-      });
-    }
-  }
-
-  Widget profile() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'YOUR ACCOUNT',
-        'Profile',
-        s.signedIn
-            ? 'Your personal identity in SynthDex.'
-            : 'Sign in to set up your profile.',
-      ),
-      Center(
-        child: CircleAvatar(
-          radius: 42,
-          child: Icon(Icons.person_outline, size: 42),
-        ),
-      ),
-      gap(24),
-      if (!s.signedIn) ...[
-        box(
-          Text(
-            'Your tracking stays on this device. Sign in or create an account to view and edit your profile.',
-            style: TextStyle(color: muted),
-          ),
-        ),
-        gap(20),
-        action('Sign in / Create account', () => go('login')),
-      ] else ...[
-        if (s.accounts.username != null)
-          Text(
-            '@${s.accounts.username}',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-        if (s.accounts.username == null)
-          action('Finish account setup', () => go('login'), secondary: true),
-        gap(8),
-        Text(
-          s.client?.auth.currentUser?.email ?? 'Signed in',
-          style: TextStyle(color: muted),
-        ),
-        gap(24),
-        label('YOUR PROGRESS'),
-        gap(12),
-        box(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${s.completedSongCount} / ${s.songs.length}',
-                key: Key('profile-completed-songs'),
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: teal,
-                ),
-              ),
-              Text(
-                'Completed songs',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              gap(6),
-              Text(
-                'A clear or better on at least one chart. Each song counts once.',
-                style: TextStyle(color: muted, fontSize: 12),
-              ),
-              gap(20),
-              Text(
-                '${s.collectedCardCount} / ${s.cardCatalog.length}',
-                key: Key('profile-collected-cards'),
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: pink,
-                ),
-              ),
-              Text(
-                'Collected cards',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              gap(6),
-              Text(
-                'Cards marked Owned. Wishlist-only cards are not counted.',
-                style: TextStyle(color: muted, fontSize: 12),
-              ),
-              gap(12),
-              Text(
-                'Based on the progress and collection saved on this device.',
-                style: TextStyle(color: muted, fontSize: 11),
-              ),
-            ],
-          ),
-        ),
-        gap(24),
-        TextField(
-          key: Key('profile-display-name'),
-          controller: displayName,
-          maxLength: 80,
-          decoration: InputDecoration(labelText: 'Display name'),
-        ),
-        gap(16),
-        action(
-          busy ? 'Saving…' : 'Save profile',
-          busy
-              ? null
-              : () => run(
-                  () => s.updateDisplayName(displayName.text),
-                  success: 'Profile saved on this device.',
-                ),
-        ),
-        gap(16),
-        action(
-          'Sign out',
-          busy
-              ? null
-              : () => run(() async {
-                  await s.client!.auth.signOut();
-                  displayName.clear();
-                }, success: 'Signed out. Local tracking data is unchanged.'),
-          secondary: true,
-        ),
-      ],
-    ],
-  );
-
-  Widget settings() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      heading(
-        'YOUR PREFERENCES',
-        'Settings',
-        'Customize this device. Cloud backup is optional.',
-      ),
-      DropdownButtonFormField<int>(
-        key: ValueKey('difficulty-${s.defaultDifficulty}'),
-        initialValue: chart,
-        decoration: InputDecoration(labelText: 'Default chart difficulty'),
-        items: List.generate(
-          difficulties.length,
-          (d) => DropdownMenuItem(value: d, child: Text(difficulties[d])),
-        ),
-        onChanged: (d) => setState(() => chart = d!),
-      ),
-      gap(),
-      DropdownButtonFormField<String>(
-        key: ValueKey('theme-${s.theme}'),
-        initialValue: settingsTheme,
-        decoration: InputDecoration(labelText: 'App theme'),
-        items: appPalettes
-            .map(
-              (palette) => DropdownMenuItem(
-                value: palette.id,
-                child: Row(
-                  children: [
-                    for (final color in palette.colors)
-                      Container(width: 12, height: 20, color: color),
-                    SizedBox(width: 12),
-                    Text(palette.name),
-                  ],
-                ),
-              ),
-            )
-            .toList(),
-        onChanged: (v) => setState(() => settingsTheme = v!),
-      ),
-      gap(),
-      DropdownButtonFormField<String>(
-        key: ValueKey('appearance-${s.appearance}'),
-        initialValue: settingsAppearance,
-        decoration: InputDecoration(labelText: 'Appearance'),
-        items: [
-          DropdownMenuItem(value: 'system', child: Text('System (default)')),
-          DropdownMenuItem(value: 'light', child: Text('Light')),
-          DropdownMenuItem(value: 'dark', child: Text('Dark')),
-        ],
-        onChanged: (value) => setState(() => settingsAppearance = value!),
-      ),
-      gap(8),
-      Text(
-        'System follows your device’s light or dark appearance.',
-        style: TextStyle(color: muted, fontSize: 12),
-      ),
-      gap(20),
-      action(
-        busy ? 'Saving…' : 'Save settings',
-        busy
-            ? null
-            : () => run(
-                () => s.updateAppSettings(
-                  chart,
-                  settingsTheme,
-                  appearance: settingsAppearance,
-                ),
-                success: 'Settings saved on this device.',
-              ),
-      ),
-      gap(30),
-      Text(
-        'Data backup',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      gap(10),
-      Text(
-        'Progress is saved on this device automatically. Sign in only to save or restore a cloud backup. Signing in never replaces local data.',
-        style: TextStyle(color: muted, fontSize: 12),
-      ),
-      gap(16),
-      if (!s.signedIn) ...[
-        action(
-          'Sign in for optional backup',
-          () => go('login'),
-          secondary: true,
-        ),
-      ] else ...[
-        if (s.accounts.username == null)
-          action('Finish account setup', () => go('login'), secondary: true),
-        gap(12),
-        Text(
-          s.backupAt == null
-              ? 'No cloud backup yet.'
-              : 'Last backup: ${s.backupAt!.toLocal().toString().substring(0, 16)} · '
-                    '${s.pendingChanges} ${s.pendingChanges == 1 ? 'change' : 'changes'} since.',
-          style: TextStyle(color: muted, fontSize: 11),
-        ),
-        gap(12),
-        action('Save cloud backup', busy ? null : () => backupAction(false)),
-        gap(10),
-        action(
-          'Load cloud backup',
-          busy ? null : () => backupAction(true),
-          secondary: true,
-        ),
-      ],
-      gap(20),
-      action(
-        'Export progress as JSON',
-        busy
-            ? null
-            : () => run(() async {
-                try {
-                  final name =
-                      'synthdex-progress-${DateTime.now().toUtc().toIso8601String().substring(0, 10)}.json';
-                  final saved = await saveTextFile(
-                    name,
-                    await s.progressExportJson(),
-                  );
-                  if (mounted) toast('Progress exported to $saved');
-                } on StateError catch (e) {
-                  if (mounted) toast(e.message);
-                } catch (_) {
-                  if (mounted) {
-                    toast('Could not save the export file. Try again.');
-                  }
-                }
-              }),
-        secondary: true,
-      ),
-      gap(8),
-      Text(
-        'Saves a versioned JSON file with every attempt, favorite and card, plus the catalog snapshot it was recorded against. No account needed.',
-        style: TextStyle(color: muted, fontSize: 12),
-      ),
-
-      gap(12),
-      action(
-        'Import progress from JSON',
-        busy ? null : importProgressAction,
-        secondary: true,
-      ),
-      gap(8),
-      Text(
-        'Restores one of your SynthDex exports on this device. You choose whether to replace or merge the attempts, favorites and cards already here. No account needed.',
-        style: TextStyle(color: muted, fontSize: 12),
-      ),
-      if (s.undoableReplacement case final kind?) ...[
-        gap(12),
-        action(
-          kind == ReplacementKind.import ? 'Undo import' : 'Undo restore',
-          busy ? null : undoReplacementAction,
-          secondary: true,
-        ),
-        gap(8),
-        Text(
-          kind == ReplacementKind.import
-              ? 'Puts back the attempts, favorites and cards this device had before the last replacing import.'
-              : 'Puts back the attempts, favorites and cards this device had before the last cloud restore.',
-          style: TextStyle(color: muted, fontSize: 12),
-        ),
-      ],
-      gap(28),
-
-      TextButton(
-        onPressed: busy
-            ? null
-            : () async {
-                final yes = await confirm(
-                  'Reset personal data?',
-                  'This deletes progress, favorites, card collection and preferences from this device. The song catalog and your cloud backup are kept.',
-                  'Reset local data',
-                );
-                if (yes && mounted) {
-                  await run(() async {
-                    await s.reset();
-                    displayName.clear();
-                    setState(() {
-                      chart = 3;
-                      settingsTheme = 'dark';
-                      settingsAppearance = 'system';
-                    });
-                  }, success: 'Local personal data reset.');
-                }
-              },
-        child: Text('Reset personal data', style: TextStyle(color: pink)),
-      ),
-      gap(16),
-      Text(
-        'Artwork via Sekai Viewer. Game artwork © SEGA, Colorful Palette and Crypton Future Media. SynthDex is an unofficial fan tracker.',
-        style: TextStyle(color: muted, fontSize: 11),
-      ),
-    ],
-  );
-  Widget login() =>
-      AccountPanel(accounts: s.accounts, onDone: () => go('account'));
   Widget content() => switch (page) {
     'filter' => filters(),
     'detail' => detail(),
@@ -1677,224 +640,182 @@ class _HubState extends State<Hub> {
     'account' => profile(),
     'settings' => settings(),
     'login' => login(),
-    _ =>
-      tab == 0
-          ? home()
-          : tab == 4
-          ? CharacterCollection(store: s)
-          : tab == 3
-          ? stats()
-          : library(),
+    _ => tab == 0 ? home() : stats(),
   };
+
+  Widget _buildActiveBody() {
+    if (page.isEmpty && (tab == 1 || tab == 2)) {
+      return libraryScrollView();
+    }
+    if (page.isEmpty && tab == 4) {
+      return CharacterCollection(
+        store: s,
+        scrollController: _scroll,
+        onRefresh: () => s.refresh(force: true),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () => s.refresh(force: true),
+      child: ListView(
+        key: PageStorageKey('$tab/$page'),
+        controller: _scroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(20, page.isEmpty ? 22 : 8, 20, 24),
+        children: [
+          if (s.loading) const LinearProgressIndicator(),
+          if (s.error != null) ...[
+            box(
+              Column(
+                children: [
+                  Text(s.error!),
+                  TextButton(
+                    onPressed: () => s.refresh(force: true),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+            gap(),
+          ],
+          if (formError != null && page != 'record') ...[
+            box(
+              Text(formError!, style: TextStyle(color: tokens.pink)),
+              prism: true,
+            ),
+            gap(),
+          ],
+          content(),
+        ],
+      ),
+    );
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: 520),
-          child: Column(
-            children: [
-              if (page.isNotEmpty)
-                Row(
+  Widget build(BuildContext context) => PopScope(
+    canPop: page.isEmpty,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop && page.isNotEmpty) {
+        _handleBack();
+      }
+    },
+    child: Scaffold(
+      body: Stack(
+        children: [
+          const Positioned.fill(child: PjskStageBackdrop()),
+          SafeArea(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: Column(
                   children: [
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: page == 'account'
-                            ? SizedBox(height: 48)
-                            : TextButton.icon(
-                                onPressed: busy
-                                    ? null
-                                    : () => go(
-                                        page == 'record' || page == 'history'
-                                            ? 'detail'
-                                            : page == 'compare'
-                                            ? 'history'
-                                            : page == 'settings' ||
-                                                  page == 'login'
-                                            ? 'account'
-                                            : '',
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.topCenter,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        switchInCurve: Curves.easeOutCubic,
+                        child: page.isEmpty
+                            ? const SizedBox.shrink(key: ValueKey('topbar-none'))
+                            : Padding(
+                                key: ValueKey('topbar-$page'),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  6,
+                                  16,
+                                  2,
+                                ),
+                                child: SizedBox(
+                                  height: 44,
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: page == 'account'
+                                              ? const SizedBox.shrink()
+                                              : TextButton.icon(
+                                                  style: TextButton.styleFrom(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 12,
+                                                          vertical: 6,
+                                                        ),
+                                                    minimumSize: const Size(
+                                                      0,
+                                                      36,
+                                                    ),
+                                                    backgroundColor: scheme
+                                                        .surfaceContainer
+                                                        .withValues(
+                                                          alpha: 0.72,
+                                                        ),
+                                                    shape:
+                                                        const StadiumBorder(),
+                                                    side: BorderSide(
+                                                      color: scheme
+                                                          .outlineVariant
+                                                          .withValues(
+                                                            alpha: 0.55,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                  onPressed: busy
+                                                      ? null
+                                                      : _handleBack,
+                                                  icon: const Icon(
+                                                    Icons.arrow_back_rounded,
+                                                    size: 16,
+                                                  ),
+                                                  label: const Text(
+                                                    'Back',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                ),
+                                        ),
                                       ),
-                                icon: Icon(Icons.arrow_back, size: 16),
-                                label: Text('Back'),
+                                      if (page == 'account')
+                                        IconButton(
+                                          tooltip: 'Settings',
+                                          padding: EdgeInsets.zero,
+                                          constraints:
+                                              const BoxConstraints.tightFor(
+                                                width: 40,
+                                                height: 40,
+                                              ),
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: busy
+                                              ? null
+                                              : () => go('settings'),
+                                          icon: const Icon(
+                                            Icons.settings_outlined,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
                       ),
                     ),
-                    if (page == 'account')
-                      Padding(
-                        padding: EdgeInsets.only(right: 12),
-                        child: IconButton(
-                          tooltip: 'Settings',
-                          onPressed: busy ? null : () => go('settings'),
-                          icon: Icon(Icons.settings_outlined),
-                        ),
+                    Expanded(
+                      child: PjskStageTransition(
+                        transitionKey: ValueKey('$tab/$page'),
+                        direction: navDirection,
+                        child: _buildActiveBody(),
                       ),
+                    ),
+                    PjskBottomNav(currentIndex: tab, onSelect: navigate),
                   ],
                 ),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () => s.refresh(force: true),
-                  child: ListView(
-                    key: ValueKey('$tab/$page'),
-                    padding: EdgeInsets.fromLTRB(
-                      22,
-                      page.isEmpty ? 32 : 8,
-                      22,
-                      24,
-                    ),
-                    children: [
-                      if (s.loading) LinearProgressIndicator(),
-                      if (s.error != null) ...[
-                        box(
-                          Column(
-                            children: [
-                              Text(s.error!),
-                              TextButton(
-                                onPressed: () => s.refresh(force: true),
-                                child: Text('Retry'),
-                              ),
-                            ],
-                          ),
-                        ),
-                        gap(),
-                      ],
-                      if (formError != null && page != 'record') ...[
-                        box(
-                          Text(formError!, style: TextStyle(color: pink)),
-                          color: scheme.primaryContainer,
-                        ),
-                        gap(),
-                      ],
-                      content(),
-                    ],
-                  ),
-                ),
               ),
-              Container(
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  border: Border(top: BorderSide(color: scheme.outlineVariant)),
-                ),
-                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Row(
-                  children: List.generate(6, (i) {
-                    final selected = tab == i;
-                    final labels = [
-                      'Home',
-                      'Songs',
-                      'Favorites',
-                      'Stats',
-                      'Roster',
-                      'Profile',
-                    ];
-                    final icons = [
-                      Icons.home_outlined,
-                      Icons.music_note_outlined,
-                      Icons.favorite_border,
-                      Icons.bar_chart_outlined,
-                      Icons.people_outline,
-                      Icons.person_outline,
-                    ];
-                    final activeIcons = [
-                      Icons.home_rounded,
-                      Icons.music_note_rounded,
-                      Icons.favorite_rounded,
-                      Icons.bar_chart_rounded,
-                      Icons.people_rounded,
-                      Icons.person_rounded,
-                    ];
-                    return Expanded(
-                      child: Semantics(
-                        selected: selected,
-                        button: true,
-                        child: InkWell(
-                          key: ValueKey('nav-${labels[i].toLowerCase()}'),
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () => navigate(i),
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 4),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedContainer(
-                                  duration: Duration(milliseconds: 180),
-                                  width: 44,
-                                  height: 30,
-                                  decoration: BoxDecoration(
-                                    color: selected
-                                        ? scheme.primaryContainer
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: Icon(
-                                    selected ? activeIcons[i] : icons[i],
-                                    size: 22,
-                                    color: selected
-                                        ? scheme.onPrimaryContainer
-                                        : muted,
-                                  ),
-                                ),
-                                SizedBox(height: 4),
-                                Text(
-                                  labels[i],
-                                  maxLines: 1,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: selected
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    color: selected ? scheme.onSurface : muted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     ),
   );
 }
 
-class ScorePlot extends CustomPainter {
-  ScorePlot(this.scores, this.teal, this.muted);
-  final Color teal, muted;
-  final List<int> scores;
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (scores.isEmpty) return;
-    final max = scores.reduce((a, b) => a > b ? a : b),
-        min = scores.reduce((a, b) => a < b ? a : b);
-    for (var i = 0; i < scores.length; i++) {
-      final x =
-          12 +
-          (size.width - 24) *
-              (scores.length == 1 ? 0.5 : i / (scores.length - 1));
-      final y =
-          15 +
-          (size.height - 45) *
-              (max == min ? 0.5 : 1 - (scores[i] - min) / (max - min));
-      canvas.drawCircle(Offset(x, y), 4.5, Paint()..color = teal);
-      if (scores.length <= 6) {
-        final text = TextPainter(
-          text: TextSpan(
-            text: '${i + 1}',
-            style: TextStyle(color: muted, fontSize: 10),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        text.paint(canvas, Offset(x - 3, size.height - 14));
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant ScorePlot oldDelegate) => true;
-}

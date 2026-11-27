@@ -134,10 +134,14 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final store = TestStore();
+    addTearDown(store.dispose);
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+    addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
     await tester.pumpWidget(
       RepaintBoundary(
         key: const Key('preview'),
-        child: SynthDexApp(store: TestStore()),
+        child: SynthDexApp(store: store),
       ),
     );
     await tester.pumpAndSettle();
@@ -145,6 +149,14 @@ void main() {
       find.byKey(const Key('preview')),
       matchesGoldenFile('goldens/dashboard.png'),
     );
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byKey(const Key('preview')),
+      matchesGoldenFile('goldens/dashboard_dark.png'),
+    );
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+    await tester.pumpAndSettle();
     for (final entry in [
       ('Songs', 'library'),
       ('Favorites', 'favorites'),

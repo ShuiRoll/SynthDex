@@ -21,6 +21,11 @@ void main() {
         '$artworkBase/character/member/res001_no004/card_after_training.webp',
       );
       expect(
+        characterPortraitUrl(1),
+        '$artworkBase/character/character_select/chr_tl_1.webp',
+      );
+      expect(characterPortraitUrl(0), isNull);
+      expect(
         gameCards
             .where((c) => c.rarity == 'birthday')
             .every((c) => !c.hasTrainedArtwork),

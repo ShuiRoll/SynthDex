@@ -189,4 +189,63 @@ void main() {
       reopened.dispose();
     },
   );
+
+  testWidgets(
+    'Settings opened from Home returns to Home and shows unsaved hint',
+    (tester) async {
+      final store = AppStore(null, memoryOnly: true);
+      await tester.pumpWidget(SynthDexApp(store: store));
+      await tester.pumpAndSettle();
+      expect(find.text('Next to play'), findsOneWidget);
+      await tapVisible(tester, find.byTooltip('Open settings'));
+      expect(find.text('App theme'), findsOneWidget);
+      expect(find.text('You have unsaved preference changes.'), findsNothing);
+      await tapVisible(tester, find.text('Violet Nocturne'));
+      await tapVisible(tester, find.text('Mint Reverie').last);
+      expect(find.text('You have unsaved preference changes.'), findsOneWidget);
+      await tapVisible(tester, find.text('Back'));
+      expect(find.text('Next to play'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      store.dispose();
+    },
+  );
+
+  testWidgets(
+    'Search clear button, difficulty counts, and score-less comparison work',
+    (tester) async {
+      final store = AppStore(null, memoryOnly: true);
+      await store.save(bundledSongs.first, 3, 1, null);
+      await store.save(bundledSongs.first, 3, 2, null);
+      await tester.pumpWidget(SynthDexApp(store: store));
+      await tester.pumpAndSettle();
+
+      // Statistics shows cleared/total and FC count per difficulty
+      await tapVisible(tester, find.byKey(const ValueKey('nav-stats')));
+      expect(
+        find.textContaining('1 / ${store.chartCount(3)} · 1 FC'),
+        findsOneWidget,
+      );
+
+      // Search clear button resets song query cleanly
+      await tapVisible(tester, find.byKey(const ValueKey('nav-songs')));
+      await tester.enterText(find.byType(TextField), 'Tell Your World');
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Clear search'), findsOneWidget);
+      await tapVisible(tester, find.byTooltip('Clear search'));
+      expect(find.byTooltip('Clear search'), findsNothing);
+
+      // Score-less comparison shows helpful empty-trend message
+      await tester.enterText(find.byType(TextField), 'Tell Your World');
+      await tester.pumpAndSettle();
+      await tapVisible(tester, find.text('Tell Your World').last);
+      await tapVisible(tester, find.text('View progress history'));
+      await tapVisible(tester, find.text('Compare latest vs previous'));
+      expect(
+        find.textContaining('No numeric scores recorded yet.'),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+      store.dispose();
+    },
+  );
 }

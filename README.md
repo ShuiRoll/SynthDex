@@ -19,6 +19,7 @@ flutter run --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-d
 
 ## Features
 
+- Refined Figma V2 styling with consistent rounded panels, typography and controls. A system-aware launch screen covers browser engine loading and local initialization, with retry when initialization fails.
 - Next-to-play Home with favorite-first uncleared chart suggestions and latest recorded activity; searchable catalog with unit/difficulty/status filters.
 - Signed-in Profile shows unique completed-song totals and owned-card totals from local data.
 - Local favorites, chart records, optional scores, and editable attempt history. No login required.
@@ -52,7 +53,7 @@ flutter test
 flutter build web --release
 ```
 
-All 70 offline tests pass, covering email signup, Google username onboarding, password recovery, duplicate usernames, profile retries, and guest persistence across restarts, best-score aggregation, completion counts, history editing/deletion, reset, corrupted-data preservation, serialized writes, search, favorites, invalid scores, theme changes, backup freshness counters, catalog refresh throttling, card roster caching, progress export and import including the import dialog's incoming and local record counts, the import toasts and undoing a replacing import or cloud restore until later progress edits retire the offer, and dropping damaged or superseded undo snapshots, and mobile rendering. Four opt-in live-CDN artwork checks are skipped by default. Static analysis and the release web build pass.
+All 74 offline tests pass, covering email signup, Google username onboarding, password recovery, duplicate usernames, profile retries, and guest persistence across restarts, best-score aggregation, completion counts, history editing/deletion, reset, corrupted-data preservation, serialized writes, search, favorites, invalid scores, theme changes, backup freshness counters, catalog refresh throttling, card roster caching, progress export and import including the import dialog's incoming and local record counts, the import toasts and undoing a replacing import or cloud restore until later progress edits retire the offer, and dropping damaged or superseded undo snapshots, mobile rendering, and startup loading, retry and light/dark launch screens. Four opt-in live-CDN artwork checks are skipped by default. Static analysis and the release web build pass.
 
 Every live catalog title and chart level was verified against the pinned English master data. APPEND backup/restore and normalized database backup functions were verified. Transactional tests checked save/restore, invalid-backup rollback, cross-account isolation, and backing up the same local attempt IDs to separate accounts. Test rows were rolled back. Security advisors report no findings; performance advisors report only unused-index information on this new database. Real email confirmation/sign-in and native-device builds have not been exercised.
 

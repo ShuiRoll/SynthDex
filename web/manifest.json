@@ -1,11 +1,11 @@
 {
-    "name": "synthdex",
-    "short_name": "synthdex",
+    "name": "SynthDex",
+    "short_name": "SynthDex",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0A1128",
+    "theme_color": "#00B8A8",
+    "description": "Offline-first Project SEKAI: COLORFUL STAGE! chart progress and card collection tracker.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

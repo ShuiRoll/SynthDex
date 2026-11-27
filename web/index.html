@@ -18,21 +18,65 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="SynthDex — your Project SEKAI progress and card collection companion.">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="synthdex">
+  <meta name="apple-mobile-web-app-title" content="SynthDex">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>synthdex</title>
+  <title>SynthDex</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; background: #F4F7FF; }
+    #launch { position: fixed; inset: 0; display: grid; place-content: center;
+      text-align: center; font: 15px system-ui, -apple-system, sans-serif; color: #0E1B3A;
+      background: linear-gradient(150deg, #E8F9F7 0%, #F4F7FF 48%, #F9EDFA 100%); }
+    #launch .mark { margin: auto auto 22px; width: 88px; height: 88px; padding: 2.5px;
+      border-radius: 26px; background: linear-gradient(135deg, #33E6D6, #FF5EA8, #FFD166, #9B7CFF);
+      box-shadow: 0 10px 26px rgba(0, 184, 168, 0.24); }
+    #launch .mark-inner { width: 100%; height: 100%; border-radius: 23.5px; display: flex;
+      justify-content: center; align-items: center; gap: 4.5px;
+      background: linear-gradient(135deg, #E9FAF8, #F4F0FF); color: #008B80; }
+    #launch .mark span { width: 4.5px; height: 13px; border-radius: 4px; background: currentColor; }
+    #launch .mark span:nth-child(2), #launch .mark span:nth-child(4) { height: 26px; }
+    #launch .mark span:nth-child(3) { height: 40px; }
+    #launch .slashes { display: inline-flex; gap: 4px; margin-bottom: 8px; }
+    #launch .slashes i { display: block; width: 6px; height: 10px; transform: skewX(-18deg); border-radius: 1.5px; }
+    #launch .slashes i:nth-child(1) { background: #00B8A8; }
+    #launch .slashes i:nth-child(2) { background: #FF5EA8; }
+    #launch .slashes i:nth-child(3) { background: #FFD166; }
+    #launch h1 { font-size: 36px; font-weight: 800; font-style: italic; letter-spacing: -1.1px; margin: 0 0 8px; }
+    #launch p { margin: 0; color: #4A5B7C; }
+    #launch .bar { width: 184px; height: 5px; border-radius: 999px;
+      background: linear-gradient(90deg, #33E6D6, #FF5EA8, #FFD166); margin: 30px auto 16px;
+      animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) { #launch .bar { animation: none; } }
+    @media (prefers-color-scheme: dark) {
+      body, #launch { background: linear-gradient(150deg, #0A1128 0%, #11193B 52%, #1A143B 100%); color: #F5F7FF; }
+      #launch .mark-inner { background: linear-gradient(135deg, #132147, #1E1848); color: #33E6D6; }
+      #launch p { color: #9FB0D4; }
+    }
+  </style>
+  <div id="launch" role="status" aria-live="polite">
+    <div class="mark" aria-hidden="true"><div class="mark-inner"><span></span><span></span><span></span><span></span><span></span></div></div>
+    <div class="slashes" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h1>SynthDex</h1><p>Your rhythm, tracked.</p>
+    <div class="bar" aria-hidden="true"></div><p>Opening your library…</p>
+  </div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      document.getElementById('launch')?.remove();
+    }, { once: true });
+  </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
